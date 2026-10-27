@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>مداد</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="mark" aria-hidden="true">م</span>
+      <div>
+        <strong>مداد</strong>
+        <small>استوديو مواقع وألعاب. الفرق الأول، وبعدين يتكتب الملف.</small>
+      </div>
+    </div>
+    <label class="project-picker">المشروع
+      <select id="project-select"></select>
+    </label>
+    <label class="project-picker">المحرك
+      <select id="engine">
+        <option value="demo">تجربة</option>
+        <option value="chatgpt">ChatGPT</option>
+        <option value="claude">Claude</option>
+        <option value="gemini">Gemini 3.1</option>
+      </select>
+    </label>
+    <div class="tools">
+      <span id="mode" class="chip">وضع التجربة</span>
+      <button id="run" type="button">شغّل</button>
+      <button id="undo" type="button">تراجع</button>
+      <button id="settings-open" type="button">الإعدادات</button>
+    </div>
+    <p id="banner" hidden></p>
+  </header>
+  <main>
+    <aside>
+      <div class="side-head"><span>الملفات</span></div>
+      <ul id="tree"></ul>
+      <form id="new-file-form" class="stack">
+        <input id="new-file-name" placeholder="ملف جديد، مثل app.py" dir="ltr">
+        <button type="submit">أضف الملف</button>
+      </form>
+      <form id="new-project-form" class="stack">
+        <input id="project-name-input" placeholder="اسم مشروع جديد">
+        <button type="submit">مشروع جديد</button>
+      </form>
+      <form id="import-form" class="stack">
+        <input id="zip-file" type="file" accept=".zip,application/zip">
+        <button type="submit">استيراد zip</button>
+      </form>
+    </aside>
+    <section id="editor-pane">
+      <div class="side-head">
+        <span id="current-path">اختَر ملف</span>
+        <span class="row">
+          <button id="show-code" type="button">الكود</button>
+          <button id="show-preview" type="button">المعاينة</button>
+          <button id="save" type="button">احفظ</button>
+        </span>
+      </div>
+      <div class="stage">
+        <textarea id="editor" dir="auto" spellcheck="false" aria-label="محرر الملف"></textarea>
+        <div id="preview-stage" hidden></div>
+      </div>
+    </section>
+    <section id="chat-pane">
+      <div class="side-head"><span>الطلب</span></div>
+      <div id="modes" class="modes">
+        <button type="button" data-mode="edit" class="active">تعديل</button>
+        <button type="button" data-mode="site">موقع</button>
+        <button type="button" data-mode="game">لعبة</button>
+        <button type="button" data-mode="image">صورة</button>
+        <button type="button" data-mode="sound">صوت</button>
+      </div>
+      <div id="messages"></div>
+      <div id="pending" hidden>
+        <p id="pending-note">لسه مفيش كتابة على الملفات. راجع الفرق وبعدين طبّق.</p>
+        <div id="diffs"></div>
+        <div class="row">
+          <button id="apply" class="primary" type="button">طبّق التعديل</button>
+          <button id="cancel-pending" type="button">إلغاء</button>
+        </div>
+      </div>
+      <form id="chat-form">
+        <textarea id="chat-input" placeholder="مثال: أضف دالة طرح"></textarea>
+        <button id="send" class="primary" type="submit">اعرض التعديل</button>
+      </form>
+    </section>
+  </main>
+  <section id="output-pane">
+    <div class="side-head">
+      <span>الناتج</span>
+      <button id="export" type="button">تصدير zip</button>
+    </div>
+    <div id="output" dir="ltr"></div>
+  </section>
+  <dialog id="settings">
+    <form id="settings-form">
+      <h2>ربط المحركات</h2>
+      <p>المفاتيح تتسجل على الجهاز اللي يشغّل مداد. العميل يجيب مفاتيحه، والبرنامج يجمع الشغل في مشروع واحد.</p>
+      <label>عنوان متوافق مع OpenAI
+        <input id="base-url" dir="ltr" placeholder="https://api.openai.com/v1">
+      </label>
+      <label>ChatGPT · النموذج
+        <input id="model" dir="ltr" placeholder="gpt-4.1">
+      </label>
+      <label>مفتاح OpenAI
+        <input id="api-key" type="password" dir="ltr" autocomplete="off" placeholder="sk-...">
+      </label>
+      <label>Claude · النموذج
+        <input id="claude-model" dir="ltr" placeholder="claude-sonnet-5-5">
+      </label>
+      <label>مفتاح Anthropic
+        <input id="claude-key" type="password" dir="ltr" autocomplete="off">
+      </label>
+      <label>Gemini نص · Gemini 3.1 Pro
+        <input id="gemini-text-model" dir="ltr" placeholder="gemini-3.1-pro-preview">
+      </label>
+      <label>Gemini صورة · 3.1 Flash
+        <input id="gemini-image-model" dir="ltr" placeholder="gemini-3.1-flash-image">
+      </label>
+      <label>مفتاح Google
+        <input id="gemini-key" type="password" dir="ltr" autocomplete="off">
+      </label>
+      <p id="key-state"></p>
+      <p class="fine">Woosh من Sony AI لتوليد مؤثرات الألعاب رخصته العامة غير تجارية، فمش داخل البرنامج اللي هيتباع. صوت اللعبة يتولد في المتصفح.</p>
+      <div class="row">
+        <button class="primary" type="submit">احفظ الإعدادات</button>
+        <button id="clear-key" type="button">امسح المفاتيح</button>
+        <button id="settings-close" type="button">إغلاق</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="/app.js"></script>
+</body>
+</html>
