@@ -70,14 +70,13 @@ def create_app(data_dir: Path, provider=None, seed: bool = True) -> FastAPI:
     async def put_settings(request: Request) -> dict:
         body = await request.json()
         current = store.load_settings()
-        if body.get("clear_key"):
-            current.pop("api_key", None)
-        elif str(body.get("api_key") or "").strip():
-            current["api_key"] = str(body["api_key"]).strip()
-        if str(body.get("base_url") or "").strip():
-            current["base_url"] = str(body["base_url"]).strip()
-        if str(body.get("model") or "").strip():
-            current["model"] = str(body["model"]).strip()
+        _save_setting(current, body, "api_key", "clear_key")
+        _save_setting(current, body, "openai_api_key", "clear_openai")
+        _save_setting(current, body, "anthropic_api_key", "clear_anthropic")
+        _save_setting(current, body, "gemini_api_key", "clear_gemini")
+        for field in ("base_url", "model", "openai_model", "anthropic_model", "gemini_text_model", "gemini_image_model"):
+            if str(body.get(field) or "").strip():
+                current[field] = str(body[field]).strip()
         store.save_settings(current)
         return _settings_view(store)
 
@@ -111,13 +110,16 @@ def create_app(data_dir: Path, provider=None, seed: bool = True) -> FastAPI:
     @app.post("/api/projects/{project_id}/chat")
     async def chat(project_id: str, request: Request) -> dict:
         body = await request.json()
-        provider_impl = resolve_provider(store.load_settings(), app.state.provider_override)
+        mode = str(body.get("mode") or "edit")
+        engine = str(body.get("engine") or "demo")
+        provider_impl = resolve_provider(store.load_settings(), app.state.provider_override, engine=engine, mode=mode)
         return handle_chat(
             store,
             provider_impl,
             project_id,
             str(body.get("message") or ""),
             body.get("active_file"),
+            mode,
         )
 
     @app.post("/api/projects/{project_id}/apply")
@@ -161,26 +163,46 @@ def create_app(data_dir: Path, provider=None, seed: bool = True) -> FastAPI:
     return app
 
 
+def _save_setting(current: dict, body: dict, field: str, clear_flag: str) -> None:
+    if body.get(clear_flag):
+        current.pop(field, None)
+    elif str(body.get(field) or "").strip():
+        current[field] = str(body[field]).strip()
+
+
+def _hint(secret: str) -> str:
+    if not secret:
+        return ""
+    if len(secret) >= 4:
+        return "••••" + secret[-4:]
+    return "••••"
+
+
 def _settings_view(store: Store) -> dict:
     saved = store.load_settings()
-    env_key = os.environ.get("OPENAI_API_KEY") or ""
-    saved_key = str(saved.get("api_key") or "")
-    key = saved_key or env_key
     forced_demo = os.environ.get("MIDAD_PROVIDER") == "demo"
-    visible = "" if forced_demo else key
-    if saved_key:
-        source = "saved"
-    elif env_key:
-        source = "env"
-    else:
-        source = "none"
+    openai = "" if forced_demo else str(saved.get("openai_api_key") or saved.get("api_key") or os.environ.get("OPENAI_API_KEY") or "")
+    claude = "" if forced_demo else str(saved.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY") or "")
+    gemini = "" if forced_demo else str(saved.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or "")
+    connected = [name for name, key in (("ChatGPT", openai), ("Claude", claude), ("Gemini", gemini)) if key]
     return {
-        "provider": "demo" if forced_demo or not visible else "openai",
+        "provider": "demo" if not connected else "connected",
+        "connected": connected,
         "base_url": str(saved.get("base_url") or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"),
-        "model": str(saved.get("model") or os.environ.get("OPENAI_MODEL") or "gpt-4o-mini"),
-        "key_set": bool(visible),
-        "key_hint": ("••••" + visible[-4:]) if len(visible) >= 4 else ("••••" if visible else ""),
-        "key_source": "none" if forced_demo else source,
+        "model": str(saved.get("openai_model") or saved.get("model") or os.environ.get("OPENAI_MODEL") or "gpt-4.1"),
+        "key_set": bool(openai),
+        "key_hint": _hint(openai),
+        "key_source": "saved" if openai else "none",
+        "engines": {
+            "chatgpt": {"key_set": bool(openai), "hint": _hint(openai), "model": str(saved.get("openai_model") or saved.get("model") or "gpt-4.1")},
+            "claude": {"key_set": bool(claude), "hint": _hint(claude), "model": str(saved.get("anthropic_model") or "claude-sonnet-5-5")},
+            "gemini": {
+                "key_set": bool(gemini),
+                "hint": _hint(gemini),
+                "text_model": str(saved.get("gemini_text_model") or "gemini-3.1-pro-preview"),
+                "image_model": str(saved.get("gemini_image_model") or "gemini-3.1-flash-image"),
+            },
+        },
     }
 
 

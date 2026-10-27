@@ -277,3 +277,230 @@ def test_settings_do_not_echo_the_key(tmp_path: Path, monkeypatch):
 def test_extract_json_accepts_fenced_objects():
     data = extract_json('```json\n{"reply_ar":"تمام","operations":[]}\n```')
     assert data["reply_ar"] == "تمام"
+
+
+def _apply(client: TestClient, project: str, preview: dict) -> dict:
+    applied = client.post(
+        f"/api/projects/{project}/apply",
+        json={"pending_id": preview["pending"]["id"]},
+    )
+    assert applied.status_code == 200, applied.text
+    return applied.json()
+
+
+def test_demo_studio_builds_site_game_image_and_sound_without_touching_existing_files(tmp_path: Path):
+    with _client(tmp_path) as client:
+        before = _text(client, "main.py")
+        notes = _text(client, "notes.txt")
+        site = client.post(
+            "/api/projects/calculator/chat",
+            json={"message": "موقع لاستوديو عمارة", "mode": "site", "engine": "demo"},
+        ).json()
+        assert site["ok"] is True
+        assert "web/index.html" in site["pending"]["summary"]
+        _apply(client, "calculator", site)
+        page = _text(client, "web/index.html")
+        assert "بيت النور" in page
+        assert "مسقط فناء" in page
+        assert _text(client, "main.py") == before
+
+        game = client.post(
+            "/api/projects/calculator/chat",
+            json={"message": "لعبة شرارة", "mode": "game"},
+        ).json()
+        _apply(client, "calculator", game)
+        game_js = _text(client, "play/game.js")
+        assert "requestAnimationFrame" in game_js
+        assert "hold(" in game_js
+        assert "بيت النور" in _text(client, "web/index.html")
+
+        image = client.post(
+            "/api/projects/calculator/chat",
+            json={"message": "فانوس", "mode": "image"},
+        ).json()
+        _apply(client, "calculator", image)
+        assert "فانوس" in _text(client, "assets/lantern.svg")
+
+        sound = client.post(
+            "/api/projects/calculator/chat",
+            json={"message": "أصوات", "mode": "sound"},
+        ).json()
+        _apply(client, "calculator", sound)
+        assert "صوت الجمع" in _text(client, "sound/index.html")
+        assert "Woosh" in sound["reply"] or "غير تجارية" in sound["reply"]
+
+        again = client.post(
+            "/api/projects/calculator/chat",
+            json={"message": "موقع تاني", "mode": "site"},
+        ).json()
+        assert again["ok"] is True
+        assert again["pending"] is None
+        assert _text(client, "main.py") == before
+        assert _text(client, "notes.txt") == notes
+
+        preview = client.get("/preview/calculator/web/index.html")
+        assert preview.status_code == 200
+        assert "بيت النور" in preview.text
+        game_page = client.get("/preview/calculator/play/index.html")
+        assert game_page.status_code == 200
+        assert "شرارة" in game_page.text
+
+        assert client.post("/api/projects/calculator/undo").json()["ok"] is True
+        missing = client.get("/api/projects/calculator/file", params={"path": "sound/index.html"})
+        assert missing.status_code == 404
+        assert "فانوس" in _text(client, "assets/lantern.svg")
+
+
+def test_image_bytes_are_previewed_then_written_and_undo_removes_them(tmp_path: Path):
+    class ImageStub:
+        name = "gemini-image"
+
+        def plan(self, request):
+            return Plan(
+                reply="صورة جاهزة",
+                blobs=[{"path": "assets/gemini.png", "data": b"\x89PNG\r\n\x1a\n", "mime": "image/png"}],
+            )
+
+    with _client(tmp_path, provider=ImageStub()) as client:
+        before = _text(client, "main.py")
+        preview = client.post(
+            "/api/projects/calculator/chat",
+            json={"message": "صورة فانوس", "mode": "image", "engine": "gemini"},
+        ).json()
+        assert preview["ok"] is True
+        assert preview["pending"]["assets"][0]["path"] == "assets/gemini.png"
+        assert not (tmp_path / "projects" / "calculator" / "assets" / "gemini.png").exists()
+        applied = _apply(client, "calculator", preview)
+        assert "assets/gemini.png" in applied["changed"]
+        target = tmp_path / "projects" / "calculator" / "assets" / "gemini.png"
+        assert target.read_bytes().startswith(b"\x89PNG")
+        shown = client.get("/preview/calculator/assets/gemini.png")
+        assert shown.status_code == 200
+        assert shown.content.startswith(b"\x89PNG")
+        blocked = client.post(
+            "/api/projects/calculator/chat",
+            json={"message": "صورة تانية", "mode": "image"},
+        ).json()
+        assert blocked["ok"] is False
+        assert target.read_bytes().startswith(b"\x89PNG")
+        client.post("/api/projects/calculator/undo")
+        assert not target.exists()
+        assert _text(client, "main.py") == before
+
+
+def test_claude_and_gemini_return_plans_and_images(tmp_path: Path):
+    from midad.engines import ClaudeProvider, GeminiImageProvider, GeminiTextProvider, parse_gemini_image
+
+    def claude_handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["x-api-key"] == "ant-secret"
+        assert request.headers["anthropic-version"] == "2023-06-01"
+        body = json.loads(request.content)
+        assert "Mode website" in body["system"]
+        plan = {
+            "reply_ar": "هضيف صفحة",
+            "operations": [{"op": "create", "path": "web/extra.html", "content": "<p>حي الملقا</p>\n"}],
+        }
+        return httpx.Response(200, json={"content": [{"type": "text", "text": json.dumps(plan, ensure_ascii=False)}]})
+
+    claude = ClaudeProvider("ant-secret", transport=httpx.MockTransport(claude_handler))
+    with _client(tmp_path, provider=claude) as client:
+        preview = client.post(
+            "/api/projects/calculator/chat",
+            json={"message": "موقع", "mode": "site"},
+        ).json()
+        assert preview["provider"] == "claude"
+        _apply(client, "calculator", preview)
+        assert "الملقا" in _text(client, "web/extra.html")
+
+    def gemini_handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["x-goog-api-key"] == "gem-secret"
+        assert "gemini-3.1-pro-preview" in str(request.url)
+        plan = {"reply_ar": "مفيش تعديل", "operations": []}
+        return httpx.Response(
+            200,
+            json={"candidates": [{"content": {"parts": [{"thought": True, "text": "hide"}, {"text": json.dumps(plan)}]}}]},
+        )
+
+    gemini = GeminiTextProvider("gem-secret", transport=httpx.MockTransport(gemini_handler))
+    with _client(tmp_path, provider=gemini) as client:
+        preview = client.post("/api/projects/calculator/chat", json={"message": "راجع", "mode": "edit"}).json()
+        assert preview["ok"] is True
+        assert preview["pending"] is None
+        assert "def add" in _text(client, "main.py")
+
+    png = "iVBORw0KGgo="
+    snake = parse_gemini_image({"candidates": [{"content": {"parts": [{"inline_data": {"mime_type": "image/png", "data": png}}]}}]})
+    assert snake[1] == "image/png"
+    assert snake[0].startswith(b"\x89PNG")
+
+    def image_handler(request: httpx.Request) -> httpx.Response:
+        assert "gemini-3.1-flash-image" in str(request.url)
+        return httpx.Response(
+            200,
+            json={"candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": png}}]}}]},
+        )
+
+    image = GeminiImageProvider("gem-secret", transport=httpx.MockTransport(image_handler))
+    with _client(tmp_path, provider=image) as client:
+        preview = client.post("/api/projects/calculator/chat", json={"message": "ارسم فانوس", "mode": "image"}).json()
+        assert preview["pending"]["assets"][0]["mime"] == "image/png"
+        _apply(client, "calculator", preview)
+        blob = (tmp_path / "projects" / "calculator" / "assets" / "gemini.png").read_bytes()
+        assert blob.startswith(b"\x89PNG")
+
+
+def test_engine_selection_follows_the_saved_key(monkeypatch):
+    from midad.engines import ClaudeProvider, GeminiImageProvider, GeminiTextProvider, MissingKeyProvider
+    from midad.provider import DemoProvider, OpenAIProvider, resolve_provider
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    assert isinstance(resolve_provider({}, environ={}, engine="demo", mode="site"), DemoProvider)
+    assert isinstance(resolve_provider({}, environ={"MIDAD_PROVIDER": "demo"}, engine="claude"), DemoProvider)
+    assert isinstance(resolve_provider({}, environ={}, engine="claude"), MissingKeyProvider)
+    claude = resolve_provider({"anthropic_api_key": "ant"}, environ={}, engine="claude", mode="site")
+    assert isinstance(claude, ClaudeProvider)
+    assert claude.model == "claude-sonnet-5-5"
+    image = resolve_provider({"gemini_api_key": "gem"}, environ={}, engine="chatgpt", mode="image")
+    assert isinstance(image, GeminiImageProvider)
+    assert image.model == "gemini-3.1-flash-image"
+    text = resolve_provider({"gemini_api_key": "gem"}, environ={}, engine="gemini", mode="game")
+    assert isinstance(text, GeminiTextProvider)
+    assert text.model == "gemini-3.1-pro-preview"
+    chat = resolve_provider({"api_key": "sk", "model": "gpt-4.1"}, environ={}, engine="chatgpt", mode="edit")
+    assert isinstance(chat, OpenAIProvider)
+    assert chat.model == "gpt-4.1"
+
+
+def test_settings_hide_every_engine_key(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("MIDAD_PROVIDER", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with _client(tmp_path, seed=False) as client:
+        saved = client.put(
+            "/api/settings",
+            json={
+                "api_key": "sk-openai-9999",
+                "anthropic_api_key": "sk-ant-8888",
+                "gemini_api_key": "AIza-7777",
+                "base_url": "https://api.openai.com/v1",
+                "gemini_image_model": "gemini-3.1-flash-image",
+            },
+        )
+        assert saved.status_code == 200
+        body = saved.json()
+        assert body["connected"] == ["ChatGPT", "Claude", "Gemini"]
+        assert body["engines"]["claude"]["hint"].endswith("8888")
+        assert body["engines"]["gemini"]["hint"].endswith("7777")
+        assert body["engines"]["gemini"]["text_model"] == "gemini-3.1-pro-preview"
+        assert "sk-openai-9999" not in saved.text
+        assert "sk-ant-8888" not in saved.text
+        assert "AIza-7777" not in saved.text
+        cleared = client.put(
+            "/api/settings",
+            json={"clear_key": True, "clear_openai": True, "clear_anthropic": True, "clear_gemini": True},
+        ).json()
+        assert cleared["connected"] == []
+        assert cleared["key_set"] is False

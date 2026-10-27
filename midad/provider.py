@@ -28,6 +28,17 @@ Rules:
 """
 
 
+def prompt_for(mode: str) -> str:
+    extra = {
+        "site": "Mode website: create a complete responsive Arabic site in web/index.html, web/styles.css and web/site.js. Distinct art direction, real copy, no purple gradient, no lorem ipsum.",
+        "game": "Mode game: create a playable canvas game in play/index.html, play/game.js and play/style.css. Include score, restart, keyboard controls and Web Audio sounds.",
+        "image": "Mode image: do not rewrite source files.",
+        "sound": "Mode sound: create only sound/index.html and sound/sfx.js using the Web Audio API.",
+        "edit": "Mode edit: change existing files with one unique search snippet. Do not recreate files.",
+    }.get(mode, "Mode edit: change existing files with one unique search snippet.")
+    return SYSTEM_PROMPT + "\n" + extra
+
+
 class ProviderError(Exception):
     def __init__(self, message: str):
         super().__init__(message)
@@ -41,12 +52,14 @@ class PlanRequest:
     files: dict[str, str]
     history: list[dict]
     active_file: str | None = None
+    mode: str = "edit"
 
 
 @dataclass
 class Plan:
     reply: str
     operations: list[Operation] = field(default_factory=list)
+    blobs: list = field(default_factory=list)
 
 
 def visible_files(files: dict[str, str]) -> dict[str, str]:
@@ -110,8 +123,14 @@ class DemoProvider:
     name = "demo"
 
     def plan(self, request: PlanRequest) -> Plan:
+        from midad.studio import studio_plan
+
         message = request.message
         files = request.files
+        if request.mode in {"site", "game", "image", "sound"}:
+            studio = studio_plan(request.mode, request.tree)
+            if studio is not None:
+                return studio
         if any(word in message for word in ("بايظ", "باظ", "مكسور")):
             return Plan(
                 reply="هحاول أحط سطر مكسور عشان تتأكد إن الفحص رافضه.",
@@ -135,9 +154,9 @@ class DemoProvider:
             )
         return Plan(
             reply=(
-                "وضع التجربة من غير مفتاح نموذج. "
-                "أقدر هنا أضيف طرح أو ضرب لمشروع الآلة الحاسبة، أو أعمل صفحة لمشروع فاضي. "
-                "أي طلب تاني على مشاريعك يحتاج مفتاح نموذج من الإعدادات، والتعديل برضو ما يتكتبش غير بعد مراجعتك."
+                "وضع التجربة يبني موقع بيت النور، ولعبة شرارة، ورسمة فانوس، ومؤثرات صوت. "
+                "وفي وضع التعديل يضيف طرح أو ضرب للآلة الحاسبة. "
+                "ChatGPT وClaude وGemini يشتغلوا لما تتسجل مفاتيحهم، والكتابة برضو بعد المراجعة."
             )
         )
 
@@ -160,13 +179,14 @@ class OpenAIProvider:
         payload_text = json.dumps(
             {
                 "instruction": request.message,
+                "mode": request.mode,
                 "active_file": request.active_file,
                 "tree": request.tree,
                 "files": request.files,
             },
             ensure_ascii=False,
         )
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}, *history, {"role": "user", "content": payload_text}]
+        messages = [{"role": "system", "content": prompt_for(request.mode)}, *history, {"role": "user", "content": payload_text}]
         data = self._complete(messages)
         try:
             content = data["choices"][0]["message"]["content"]
@@ -198,18 +218,45 @@ class OpenAIProvider:
             raise ProviderError("النموذج رجّع رد مش مفهوم.") from exc
 
 
-def resolve_provider(settings: dict, override: object | None = None, environ: dict | None = None):
+def resolve_provider(settings: dict, override: object | None = None, environ: dict | None = None, engine: str = "demo", mode: str = "edit"):
     if override is not None:
         return override
     env = os.environ if environ is None else environ
-    if env.get("MIDAD_PROVIDER") == "demo":
+    if env.get("MIDAD_PROVIDER") == "demo" or engine in {"", "demo"}:
         return DemoProvider()
-    api_key = str(settings.get("api_key") or env.get("OPENAI_API_KEY") or "")
-    if not api_key:
-        return DemoProvider()
-    base_url = str(settings.get("base_url") or env.get("OPENAI_BASE_URL") or "https://api.openai.com/v1")
-    model = str(settings.get("model") or env.get("OPENAI_MODEL") or "gpt-4o-mini")
-    return OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+    from midad.engines import (
+        CLAUDE_MODEL,
+        GEMINI_IMAGE_MODEL,
+        GEMINI_TEXT_MODEL,
+        ClaudeProvider,
+        GeminiImageProvider,
+        GeminiTextProvider,
+        MissingKeyProvider,
+    )
+
+    if mode == "image":
+        gemini_key = str(settings.get("gemini_api_key") or env.get("GEMINI_API_KEY") or "")
+        if not gemini_key:
+            return MissingKeyProvider("توليد الصورة من Gemini يحتاج مفتاح Google في الإعدادات.")
+        return GeminiImageProvider(gemini_key, str(settings.get("gemini_image_model") or GEMINI_IMAGE_MODEL))
+    if engine == "claude":
+        key = str(settings.get("anthropic_api_key") or env.get("ANTHROPIC_API_KEY") or "")
+        if not key:
+            return MissingKeyProvider("Claude يحتاج مفتاح Anthropic في الإعدادات.")
+        return ClaudeProvider(key, str(settings.get("anthropic_model") or CLAUDE_MODEL))
+    if engine == "gemini":
+        key = str(settings.get("gemini_api_key") or env.get("GEMINI_API_KEY") or "")
+        if not key:
+            return MissingKeyProvider("Gemini يحتاج مفتاح Google في الإعدادات.")
+        return GeminiTextProvider(key, str(settings.get("gemini_text_model") or GEMINI_TEXT_MODEL))
+    if engine in {"chatgpt", "openai"}:
+        key = str(settings.get("openai_api_key") or settings.get("api_key") or env.get("OPENAI_API_KEY") or "")
+        if not key:
+            return MissingKeyProvider("ChatGPT يحتاج مفتاح OpenAI في الإعدادات.")
+        base_url = str(settings.get("base_url") or env.get("OPENAI_BASE_URL") or "https://api.openai.com/v1")
+        model = str(settings.get("openai_model") or settings.get("model") or env.get("OPENAI_MODEL") or "gpt-4.1")
+        return OpenAIProvider(api_key=key, base_url=base_url, model=model)
+    return DemoProvider()
 
 
 def _arithmetic(files: dict[str, str], function_name: str, label: str, expression: str, print_line: str) -> Plan:

@@ -154,6 +154,15 @@ class Store:
         meta["undo"] = undo
         self._write_meta(meta)
 
+    def write_new_bytes(self, project_id: str, relative: str, data: bytes) -> None:
+        if len(data) > 5_000_000:
+            raise SafetyError("الملف أكبر من الحد المسموح.")
+        target = self.resolve(project_id, relative)
+        if target.exists():
+            raise SafetyError(f"{relative} موجود، فمش هكتب فوقه.")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+
     def materialize(self, project_id: str, old: dict[str, str], new: dict[str, str]) -> None:
         for path in sorted(set(old) - set(new)):
             target = self.resolve(project_id, path)
@@ -195,6 +204,7 @@ def public_meta(meta: dict) -> dict:
             "id": pending["id"],
             "summary": pending.get("summary", ""),
             "diffs": pending.get("diffs", []),
+            "assets": pending.get("assets") or [],
         }
     return {
         "id": meta["id"],

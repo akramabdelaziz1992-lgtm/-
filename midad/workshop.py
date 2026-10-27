@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import difflib
 import uuid
 
@@ -19,12 +20,14 @@ def project_view(store: Store, project_id: str) -> dict:
     return view
 
 
-def handle_chat(store: Store, provider, project_id: str, message: str, active_file: str | None) -> dict:
+def handle_chat(store: Store, provider, project_id: str, message: str, active_file: str | None, mode: str = "edit") -> dict:
     message = (message or "").strip()
     if not message:
         raise ValueError("اكتب الطلب الأول.")
     if len(message) > 8000:
         raise ValueError("الطلب أطول من اللازم.")
+    if mode not in {"edit", "site", "game", "image", "sound"}:
+        mode = "edit"
     with store.lock:
         meta = store.read_meta(project_id)
         tree, files = store.snapshot_files(project_id)
@@ -36,12 +39,14 @@ def handle_chat(store: Store, provider, project_id: str, message: str, active_fi
                     files=visible_files(files),
                     history=meta.get("chat", []),
                     active_file=active_file,
+                    mode=mode,
                 )
             )
             proposed = simulate(files, plan.operations, message, occupied=set(tree))
             error = precheck(files, proposed)
             if error:
                 raise SafetyError(error)
+            assets = _assets(plan.blobs, tree)
         except (SafetyError, ProviderError) as exc:
             reply = exc.message
             meta.setdefault("chat", []).append({"role": "user", "content": message})
@@ -52,13 +57,16 @@ def handle_chat(store: Store, provider, project_id: str, message: str, active_fi
             view.update({"ok": False, "reply": reply, "provider": getattr(provider, "name", "demo")})
             return view
         paths = changed_paths(files, proposed)
+        if assets:
+            paths = sorted(set(paths) | {item["path"] for item in assets})
         pending = None
-        if paths:
+        if paths or assets:
             pending = {
                 "id": uuid.uuid4().hex,
-                "summary": _summary(paths),
-                "diffs": [_diff(path, files.get(path, ""), proposed.get(path, "")) for path in paths],
+                "summary": _summary(paths or [item["path"] for item in assets]),
+                "diffs": [_diff(path, files.get(path, ""), proposed.get(path, "")) for path in changed_paths(files, proposed)],
                 "operations": [_op_dict(operation) for operation in plan.operations],
+                "assets": assets,
                 "digest": digest(files),
                 "message": message,
             }
@@ -93,7 +101,8 @@ def handle_apply(store: Store, project_id: str, pending_id: str) -> dict:
             store.write_meta(meta)
             raise
         paths = changed_paths(files, proposed)
-        if not paths:
+        assets = pending.get("assets") or []
+        if not paths and not assets:
             meta["pending"] = None
             store.write_meta(meta)
             view = project_view(store, project_id)
@@ -101,9 +110,15 @@ def handle_apply(store: Store, project_id: str, pending_id: str) -> dict:
             return view
         revision = store.snapshot(project_id)
         try:
-            store.materialize(project_id, files, proposed)
+            if paths:
+                store.materialize(project_id, files, proposed)
+            for asset in assets:
+                store.write_new_bytes(project_id, asset["path"], base64.b64decode(asset["b64"]))
+                paths.append(asset["path"])
         except Exception as exc:
             store.restore(project_id, revision)
+            if isinstance(exc, SafetyError):
+                raise
             raise SafetyError("حصل خطأ وأنا بكتب، ورجّعت الملفات زي ما كانت.") from exc
         store.push_undo(project_id, revision)
         meta = store.read_meta(project_id)
@@ -217,6 +232,27 @@ def export_zip(store: Store, project_id: str) -> bytes:
         for relative in tree:
             archive.write(directory / relative, relative)
     return buffer.getvalue()
+
+
+def _assets(blobs: list, tree: list[str]) -> list[dict]:
+    import base64 as b64
+
+    from midad.safety import safe_rel
+
+    assets = []
+    occupied = set(tree)
+    for blob in blobs or []:
+        path = safe_rel(str(blob.get("path") or ""))
+        data = blob.get("data") or b""
+        if isinstance(data, str):
+            data = b64.b64decode(data)
+        if path in occupied:
+            raise SafetyError(f"{path} موجود، فمش هكتب الصورة فوقه.")
+        if len(data) > 5_000_000:
+            raise SafetyError("الصورة أكبر من الحد المسموح.")
+        assets.append({"path": path, "mime": str(blob.get("mime") or "image/png"), "b64": b64.b64encode(data).decode("ascii")})
+        occupied.add(path)
+    return assets
 
 
 def _diff(path: str, old: str, new: str) -> dict:

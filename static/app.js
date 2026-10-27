@@ -1,4 +1,4 @@
-const state = { id: null, file: null, pendingId: null };
+const state = { id: null, file: null, pendingId: null, mode: "edit", engine: "demo" };
 
 const projectSelect = document.querySelector("#project-select");
 const tree = document.querySelector("#tree");
@@ -56,6 +56,14 @@ function renderPending(pending) {
   diffs.replaceChildren();
   if (!pending) return;
   pendingNote.textContent = `${pending.summary}. لسه مفيش كتابة على الملفات. راجع الفرق وبعدين طبّق.`;
+  for (const asset of pending.assets || []) {
+    const title = document.createElement("h3");
+    title.textContent = asset.path;
+    const image = document.createElement("img");
+    image.alt = asset.path;
+    image.src = `data:${asset.mime || "image/png"};base64,${asset.b64}`;
+    diffs.append(title, image);
+  }
   for (const diff of pending.diffs || []) {
     const title = document.createElement("h3");
     title.textContent = diff.path;
@@ -138,13 +146,56 @@ async function saveFile() {
 
 async function loadSettings() {
   const settings = await api("/api/settings");
-  mode.textContent = settings.provider === "openai" ? "متصل بالنموذج" : "وضع التجربة";
+  const connected = settings.connected || [];
+  mode.textContent = connected.length ? connected.join(" · ") : "وضع التجربة";
   document.querySelector("#base-url").value = settings.base_url;
-  document.querySelector("#model").value = settings.model;
-  document.querySelector("#key-state").textContent = settings.key_set
-    ? `المفتاح محفوظ ${settings.key_hint}`
-    : "مفيش مفتاح. وضع التجربة يعدّل الآلة الحاسبة ويعمل صفحة بسيطة.";
+  document.querySelector("#model").value = settings.engines.chatgpt.model;
+  document.querySelector("#claude-model").value = settings.engines.claude.model;
+  document.querySelector("#gemini-text-model").value = settings.engines.gemini.text_model;
+  document.querySelector("#gemini-image-model").value = settings.engines.gemini.image_model;
+  const notes = [];
+  if (settings.engines.chatgpt.key_set) notes.push(`ChatGPT ${settings.engines.chatgpt.hint}`);
+  if (settings.engines.claude.key_set) notes.push(`Claude ${settings.engines.claude.hint}`);
+  if (settings.engines.gemini.key_set) notes.push(`Gemini ${settings.engines.gemini.hint}`);
+  document.querySelector("#key-state").textContent = notes.length
+    ? notes.join(" · ")
+    : "مفيش مفاتيح. وضع التجربة يبني موقع بيت النور، ولعبة شرارة، وصورة الفانوس، والمؤثرات.";
   return settings;
+}
+
+function previewEntry() {
+  const tree = state.tree || [];
+  const preferred = {
+    site: "web/index.html",
+    game: "play/index.html",
+    sound: "sound/index.html",
+    image: "assets/lantern.svg",
+  }[state.mode];
+  if (preferred && tree.includes(preferred)) return preferred;
+  return ["web/index.html", "play/index.html", "sound/index.html", "assets/lantern.svg", "assets/gemini.png"].find((path) => tree.includes(path)) || "";
+}
+
+function showPreview(path) {
+  const stage = document.querySelector("#preview-stage");
+  stage.hidden = false;
+  editor.hidden = true;
+  stage.replaceChildren();
+  if (path.endsWith(".svg") || path.endsWith(".png") || path.endsWith(".jpg") || path.endsWith(".jpeg") || path.endsWith(".webp")) {
+    const image = document.createElement("img");
+    image.alt = path;
+    image.src = `/preview/${state.id}/${path}`;
+    stage.append(image);
+    return;
+  }
+  const frame = document.createElement("iframe");
+  frame.title = "معاينة";
+  frame.src = `/preview/${state.id}/${path}`;
+  stage.append(frame);
+}
+
+function showCode() {
+  document.querySelector("#preview-stage").hidden = true;
+  editor.hidden = false;
 }
 
 document.querySelector("#chat-form").addEventListener("submit", async (event) => {
@@ -158,7 +209,7 @@ document.querySelector("#chat-form").addEventListener("submit", async (event) =>
     if (editor.dataset.dirty === "1") await saveFile();
     await api(`/api/projects/${state.id}/chat`, {
       method: "POST",
-      body: JSON.stringify({ message, active_file: state.file }),
+      body: JSON.stringify({ message, active_file: state.file, mode: state.mode, engine: state.engine }),
     });
     document.querySelector("#chat-input").value = "";
     await refresh();
@@ -180,6 +231,8 @@ document.querySelector("#apply").addEventListener("click", async () => {
     });
     editor.dataset.dirty = "0";
     await refresh();
+    const entry = previewEntry();
+    if (entry) showPreview(entry);
   } catch (error) {
     showError(error.message);
     await refresh();
@@ -309,9 +362,17 @@ document.querySelector("#settings-form").addEventListener("submit", async (event
       body: JSON.stringify({
         base_url: document.querySelector("#base-url").value,
         model: document.querySelector("#model").value,
+        openai_model: document.querySelector("#model").value,
         api_key: document.querySelector("#api-key").value,
+        anthropic_model: document.querySelector("#claude-model").value,
+        anthropic_api_key: document.querySelector("#claude-key").value,
+        gemini_text_model: document.querySelector("#gemini-text-model").value,
+        gemini_image_model: document.querySelector("#gemini-image-model").value,
+        gemini_api_key: document.querySelector("#gemini-key").value,
       }),
     });
+    document.querySelector("#claude-key").value = "";
+    document.querySelector("#gemini-key").value = "";
     document.querySelector("#api-key").value = "";
     await loadSettings();
     document.querySelector("#settings").close();
@@ -321,9 +382,42 @@ document.querySelector("#settings-form").addEventListener("submit", async (event
   }
 });
 document.querySelector("#clear-key").addEventListener("click", async () => {
-  await api("/api/settings", { method: "PUT", body: JSON.stringify({ clear_key: true }) });
+  await api("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify({ clear_key: true, clear_openai: true, clear_anthropic: true, clear_gemini: true }),
+  });
+  document.querySelector("#claude-key").value = "";
+  document.querySelector("#gemini-key").value = "";
   document.querySelector("#api-key").value = "";
   await loadSettings();
 });
+
+document.querySelector("#modes").addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  state.mode = button.dataset.mode;
+  for (const item of document.querySelectorAll("#modes button")) item.classList.toggle("active", item === button);
+  const hints = {
+    edit: "مثال: أضف دالة طرح",
+    site: "مثال: موقع لاستوديو عمارة في الرياض",
+    game: "مثال: لعبة تجمع الشرر بالأسهم",
+    image: "مثال: فانوس نحاسي على خلفية ليلية",
+    sound: "مثال: أصوات الجمع والخسارة",
+  };
+  document.querySelector("#chat-input").placeholder = hints[state.mode];
+});
+document.querySelector("#engine").addEventListener("change", (event) => {
+  state.engine = event.target.value;
+});
+document.querySelector("#show-preview").addEventListener("click", () => {
+  const entry = previewEntry();
+  if (!entry) {
+    showError("لسه مفيش معاينة. ابنِ موقع أو لعبة الأول.");
+    return;
+  }
+  showError("");
+  showPreview(entry);
+});
+document.querySelector("#show-code").addEventListener("click", () => showCode());
 
 loadSettings().then(() => loadProjects()).catch((error) => showError(error.message));

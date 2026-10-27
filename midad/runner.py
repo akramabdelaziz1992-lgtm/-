@@ -9,7 +9,13 @@ from pathlib import Path
 
 from midad.safety import SafetyError, safe_rel
 
-SCRUB_NAMES = {"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "MIDAD_PROVIDER"}
+SCRUB_NAMES = {
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "MIDAD_PROVIDER",
+}
 PREVIEW_SUFFIXES = {".html", ".htm", ".css", ".js", ".mjs", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".txt", ".md"}
 
 
