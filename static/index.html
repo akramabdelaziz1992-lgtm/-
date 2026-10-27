@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>مداد</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="mark" aria-hidden="true">م</span>
+      <div>
+        <strong>مداد</strong>
+        <small>اكتب بالعربي. راجع الفرق. وبعدين يتكتب الملف.</small>
+      </div>
+    </div>
+    <label class="project-picker">المشروع
+      <select id="project-select"></select>
+    </label>
+    <div class="tools">
+      <span id="mode" class="chip">وضع التجربة</span>
+      <button id="run" type="button">شغّل</button>
+      <button id="undo" type="button">تراجع</button>
+      <button id="settings-open" type="button">الإعدادات</button>
+    </div>
+    <p id="banner" hidden></p>
+  </header>
+  <main>
+    <aside>
+      <div class="side-head"><span>الملفات</span></div>
+      <ul id="tree"></ul>
+      <form id="new-file-form" class="stack">
+        <input id="new-file-name" placeholder="ملف جديد، مثل app.py" dir="ltr">
+        <button type="submit">أضف الملف</button>
+      </form>
+      <form id="new-project-form" class="stack">
+        <input id="project-name-input" placeholder="اسم مشروع جديد">
+        <button type="submit">مشروع جديد</button>
+      </form>
+      <form id="import-form" class="stack">
+        <input id="zip-file" type="file" accept=".zip,application/zip">
+        <button type="submit">استيراد zip</button>
+      </form>
+    </aside>
+    <section id="editor-pane">
+      <div class="side-head">
+        <span id="current-path">اختَر ملف</span>
+        <button id="save" type="button">احفظ</button>
+      </div>
+      <textarea id="editor" dir="auto" spellcheck="false" aria-label="محرر الملف"></textarea>
+    </section>
+    <section id="chat-pane">
+      <div class="side-head"><span>الطلب</span></div>
+      <div id="messages"></div>
+      <div id="pending" hidden>
+        <p id="pending-note">لسه مفيش كتابة على الملفات. راجع الفرق وبعدين طبّق.</p>
+        <div id="diffs"></div>
+        <div class="row">
+          <button id="apply" class="primary" type="button">طبّق التعديل</button>
+          <button id="cancel-pending" type="button">إلغاء</button>
+        </div>
+      </div>
+      <form id="chat-form">
+        <textarea id="chat-input" placeholder="مثال: أضف دالة طرح"></textarea>
+        <button id="send" class="primary" type="submit">اعرض التعديل</button>
+      </form>
+    </section>
+  </main>
+  <section id="output-pane">
+    <div class="side-head">
+      <span>الناتج</span>
+      <button id="export" type="button">تصدير zip</button>
+    </div>
+    <div id="output" dir="ltr"></div>
+  </section>
+  <dialog id="settings">
+    <form id="settings-form">
+      <h2>اتصال النموذج</h2>
+      <p>حط مفتاح خدمة متوافقة مع OpenAI. المفتاح بيتخزن على الجهاز اللي يشغّل مداد، والرد بيتراجع قبل ما يتكتب أي ملف.</p>
+      <label>العنوان
+        <input id="base-url" dir="ltr" placeholder="https://api.openai.com/v1">
+      </label>
+      <label>النموذج
+        <input id="model" dir="ltr" placeholder="gpt-4o-mini">
+      </label>
+      <label>المفتاح
+        <input id="api-key" type="password" dir="ltr" autocomplete="off" placeholder="sk-...">
+      </label>
+      <p id="key-state"></p>
+      <div class="row">
+        <button class="primary" type="submit">احفظ الإعدادات</button>
+        <button id="clear-key" type="button">امسح المفتاح</button>
+        <button id="settings-close" type="button">إغلاق</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="/app.js"></script>
+</body>
+</html>
